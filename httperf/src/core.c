@@ -489,7 +489,7 @@ do_send(Conn * conn)
 		conn->sendq = call->sendq_next;
 		if (!conn->sendq) {
 			conn->sendq_tail = 0;
-			FD_CLR(sd, &wrfds);
+			conn_write_clear(conn);
 		}
 		arg.l = 0;
 		event_signal(EV_CALL_SEND_STOP, (Object *) call, arg);
@@ -536,7 +536,7 @@ recv_done(Call * call)
 
 	conn->recvq = call->recvq_next;
 	if (!conn->recvq) {
-		FD_CLR(conn->sd, &rdfds);
+		conn_read_clear(conn);
 		conn->recvq_tail = 0;
 	}
 	/*
@@ -788,11 +788,11 @@ core_ssl_connect(Conn * s)
 					"write");
 			if (reason == SSL_ERROR_WANT_READ
 			    && !FD_ISSET(s->sd, &rdfds)) {
-				FD_CLR(s->sd, &wrfds);
+				conn_write_clear(s);
 				set_active_read(s);
 			} else if (reason == SSL_ERROR_WANT_WRITE
 				   && !FD_ISSET(s->sd, &wrfds)) {
-				FD_CLR(s->sd, &rdfds);
+				conn_read_clear(s);
 				set_active_write(s);
 			}
 			return;
@@ -1142,8 +1142,8 @@ core_close(Conn * conn)
 	if (sd >= 0) {
 		close(sd);
 		sd_to_conn[sd] = 0;
-		FD_CLR(sd, &wrfds);
-		FD_CLR(sd, &rdfds);
+		conn_read_clear(conn);
+		conn_write_clear(conn);
 	}
 	if (conn->myport > 0)
 		port_put(conn->myport);
@@ -1243,8 +1243,7 @@ core_loop(void)
 							else
 #endif
 							if (is_writable) {
-								FD_CLR(sd,
-								       &wrfds);
+								conn_write_clear(conn);
 								conn->state =
 								    S_CONNECTED;
 								arg.l = 0;
