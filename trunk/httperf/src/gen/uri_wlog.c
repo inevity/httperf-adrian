@@ -76,6 +76,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <event.h>
 
 #include <generic_types.h>
 #include <object.h>

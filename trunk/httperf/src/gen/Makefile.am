@@ -1,5 +1,5 @@
 # what flags you want to pass to the C compiler & linker
-AM_CFLAGS = -I$(srcdir)/.. -I$(srcdir)/../lib
+AM_CFLAGS = -I$(srcdir)/.. -I$(srcdir)/../lib -I/usr/local/include
 AM_LDFLAGS =
 
 noinst_LIBRARIES = libgen.a
