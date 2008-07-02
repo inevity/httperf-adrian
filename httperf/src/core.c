@@ -1161,37 +1161,63 @@ core_close(Conn * conn)
 }
 
 static void
-conn_handle_event(int sd, int is_readable, int is_writable)
+conn_handle_read_event(Conn *conn)
 {
-	Conn *conn = sd_to_conn[sd];
+	int sd = conn->sd;
 	Any_Type arg;
 
 	conn_inc_ref(conn);
 
 	if (conn->watchdog) {
-		timer_cancel(conn-> watchdog);
+		timer_cancel(conn->watchdog);
 		conn->watchdog = 0;
 	}
+
+	if (conn->recvq)
+		do_recv(conn);
+
+	conn_dec_ref(conn);
+}
+
+static void
+conn_handle_write_event(Conn *conn)
+{
+	int sd = conn->sd;
+	Any_Type arg;
+
+	conn_inc_ref(conn);
+
+	if (conn->watchdog) {
+		timer_cancel(conn->watchdog);
+		conn->watchdog = 0;
+	}
+
 	if (conn->state == S_CONNECTING) {
 #ifdef HAVE_SSL
 		if (param.use_ssl)
 			core_ssl_connect (conn);
-		else
+		else {
 #endif
-		if (is_writable) {
 			conn_write_clear(conn);
 			conn->state = S_CONNECTED;
 			arg.l = 0;
 			event_signal(EV_CONN_CONNECTED, (Object *) conn, arg);
 		}
-	} else {
-		if (is_writable && conn->sendq)
-			do_send(conn);
-			if (is_readable && conn->recvq)
-				do_recv(conn);
-	}
+	} else if (conn->sendq)
+		do_send(conn);
 
 	conn_dec_ref(conn);
+}
+
+static void
+conn_handle_event(int sd, int is_readable, int is_writable)
+{
+	Conn *conn = sd_to_conn[sd];
+
+	if (is_readable)
+		conn_handle_read_event(conn);
+	if (is_writable)
+		conn_handle_write_event(conn);
 }
 
 
