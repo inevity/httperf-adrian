@@ -73,7 +73,6 @@
 static int      running = 1;
 static int      iteration;
 static u_long   max_burst_len;
-static fd_set   rdfds, wrfds;
 static int      min_sd = 0x7fffffff, max_sd = 0, alloced_sd_to_conn = 0;
 static struct timeval select_timeout;
 static struct sockaddr_in myaddr;
@@ -135,6 +134,8 @@ static u_int    syscall_count[SC_NUM_SYSCALLS];
     while (errno == EINTR);			\
   }
 #endif
+static void conn_handle_read_event(int sd, short ev, void *a);
+static void conn_handle_write_event(int sd, short ev, void *a);
 
 struct hash_entry {
 	const char     *hostname;
@@ -277,28 +278,28 @@ static void
 conn_read_set(Conn *s)
 {
 	if (s->sd > -1)
-		FD_SET(s->sd, &rdfds);
+		event_add(&s->ev_read, NULL);
 }
 
 static void
 conn_read_clear(Conn *s)
 {
 	if (s->sd > -1)
-		FD_CLR(s->sd, &rdfds);
+		event_del(&s->ev_read);
 }
 
 static void
 conn_write_set(Conn *s)
 {
 	if (s->sd > -1)
-		FD_SET(s->sd, &wrfds);
+		event_add(&s->ev_write, NULL);
 }
 
 static void
 conn_write_clear(Conn *s)
 {
 	if (s->sd > -1)
-		FD_CLR(s->sd, &wrfds);
+		event_del(&s->ev_write);
 }
 
 static void
@@ -326,11 +327,9 @@ conn_timeout(struct Timer *t, Any_Type arg)
 		c = 0;
 		if (s->sd >= 0) {
 			now = timer_now();
-			if (FD_ISSET(s->sd, &rdfds)
-			    && s->recvq && now >= s->recvq->timeout)
+			if (s->recvq && now >= s->recvq->timeout)
 				c = s->recvq;
-			else if (FD_ISSET(s->sd, &wrfds)
-				 && s->sendq && now >= s->sendq->timeout)
+			else if (s->sendq && now >= s->sendq->timeout)
 				c = s->sendq;
 		}
 		if (DBG > 0) {
@@ -700,8 +699,6 @@ core_init(void)
 	struct rlimit   rlimit;
 
 	memset(&hash_table, 0, sizeof(hash_table));
-	memset(&rdfds, 0, sizeof(rdfds));
-	memset(&wrfds, 0, sizeof(wrfds));
 	memset(&myaddr, 0, sizeof(myaddr));
 	memset(&port_free_map, 0xff, sizeof(port_free_map));
 
@@ -790,12 +787,10 @@ core_ssl_connect(Conn * s)
 					(reason ==
 					 SSL_ERROR_WANT_READ) ? "read" :
 					"write");
-			if (reason == SSL_ERROR_WANT_READ
-			    && !FD_ISSET(s->sd, &rdfds)) {
+			if (reason == SSL_ERROR_WANT_READ) {
 				conn_write_clear(s);
 				set_active_read(s);
-			} else if (reason == SSL_ERROR_WANT_WRITE
-				   && !FD_ISSET(s->sd, &wrfds)) {
+			} else if (reason == SSL_ERROR_WANT_WRITE) {
 				conn_read_clear(s);
 				set_active_write(s);
 			}
@@ -908,6 +903,8 @@ core_connect(Conn * s)
 	}
 
 	s->sd = sd;
+	event_set(&s->ev_read, sd, EV_READ | EV_PERSIST, conn_handle_read_event, s);
+	event_set(&s->ev_write, sd, EV_WRITE | EV_PERSIST, conn_handle_write_event, s);
 	if (sd >= alloced_sd_to_conn) {
 		size_t          size, old_size;
 
@@ -1161,9 +1158,9 @@ core_close(Conn * conn)
 }
 
 static void
-conn_handle_read_event(Conn *conn)
+conn_handle_read_event(int sd, short ev, void *a)
 {
-	int sd = conn->sd;
+	Conn *conn = sd_to_conn[sd];
 	Any_Type arg;
 
 	conn_inc_ref(conn);
@@ -1180,9 +1177,9 @@ conn_handle_read_event(Conn *conn)
 }
 
 static void
-conn_handle_write_event(Conn *conn)
+conn_handle_write_event(int sd, short ev, void *a)
 {
-	int sd = conn->sd;
+	Conn *conn = sd_to_conn[sd];
 	Any_Type arg;
 
 	conn_inc_ref(conn);
@@ -1209,18 +1206,6 @@ conn_handle_write_event(Conn *conn)
 	conn_dec_ref(conn);
 }
 
-static void
-conn_handle_event(int sd, int is_readable, int is_writable)
-{
-	Conn *conn = sd_to_conn[sd];
-
-	if (is_readable)
-		conn_handle_read_event(conn);
-	if (is_writable)
-		conn_handle_write_event(conn);
-}
-
-
 void
 core_loop(void)
 {
@@ -1230,74 +1215,8 @@ core_loop(void)
 	fd_mask         mask;
 
 	while (running) {
-		struct timeval  tv = select_timeout;
-
 		timer_tick();
-
-		readable = rdfds;
-		writable = wrfds;
-		min_i = min_sd / NFDBITS;
-		max_i = max_sd / NFDBITS;
-
-		SYSCALL(SELECT,
-			n = select(max_sd + 1, &readable, &writable, 0, &tv));
-
-		++iteration;
-
-		if (n <= 0) {
-			if (n < 0) {
-				fprintf(stderr,
-					"%s.core_loop: select failed: %s\n",
-					prog_name, strerror(errno));
-				exit(1);
-			}
-			continue;
-		}
-
-		while (n > 0) {
-			/*
-			 * find the index of the fdmask that has something
-			 * going on: 
-			 */
-			do {
-				++i;
-				if (i > max_i)
-					i = min_i;
-
-				assert(i <= max_i);
-				mask =
-				    readable.fds_bits[i] | writable.
-				    fds_bits[i];
-			}
-			while (!mask);
-			bit = 0;
-			sd = i * NFDBITS + bit;
-			do {
-				if (mask & 1) {
-					--n;
-
-					is_readable =
-					    (FD_ISSET(sd, &readable)
-					     && FD_ISSET(sd, &rdfds));
-					is_writable = (FD_ISSET(sd, &writable)
-						       && FD_ISSET(sd,
-								   &wrfds));
-
-					if (is_readable || is_writable) {
-						/*
-						 * only handle sockets that
-						 * haven't timed out yet 
-						 */
-						conn_handle_event(sd, is_readable, is_writable);
-						if (n > 0)
-							timer_tick();
-					}
-				}
-				mask = ((u_long) mask) >> 1;
-				++sd;
-			}
-			while (mask);
-		}
+		n = event_loop(EVLOOP_ONCE);
 	}
 }
 
