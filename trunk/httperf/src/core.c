@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <event.h>
 
 #include <sys/ioctl.h>
 #include <sys/socket.h>
