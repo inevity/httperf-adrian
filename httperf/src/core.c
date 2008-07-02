@@ -274,6 +274,30 @@ port_get(void)
 }
 
 static void
+conn_read_set(Conn *s)
+{
+	FD_SET(s->sd, &rdfds);
+}
+
+static void
+conn_read_clear(Conn *s)
+{
+	FD_CLR(s->sd, &rdfds);
+}
+
+static void
+conn_write_set(Conn *s)
+{
+	FD_SET(s->sd, &wrfds);
+}
+
+static void
+conn_write_clear(Conn *s)
+{
+	FD_CLR(s->sd, &wrfds);
+}
+
+static void
 conn_failure(Conn * s, int err)
 {
 	Any_Type        arg;
@@ -320,17 +344,11 @@ conn_timeout(struct Timer *t, Any_Type arg)
 }
 
 static void
-set_active(Conn * s, fd_set * fdset)
+set_active_shared(Conn * s)
 {
 	int             sd = s->sd;
 	Any_Type        arg;
 	Time            timeout;
-
-	FD_SET(sd, fdset);
-	if (sd < min_sd)
-		min_sd = sd;
-	if (sd >= max_sd)
-		max_sd = sd;
 
 	if (s->watchdog)
 		return;
@@ -346,6 +364,32 @@ set_active(Conn * s, fd_set * fdset)
 		s->watchdog = timer_schedule(conn_timeout, arg,
 					     timeout - timer_now());
 	}
+}
+
+static void
+set_active_read(Conn *s)
+{
+	int sd = s->sd;
+
+	conn_read_set(s);
+	if (sd < min_sd)
+		min_sd = sd;
+	if (sd >= max_sd)
+		max_sd = sd;
+	set_active_shared(s);
+}
+
+static void
+set_active_write(Conn *s)
+{
+	int sd = s->sd;
+
+	conn_write_set(s);
+	if (sd < min_sd)
+		min_sd = sd;
+	if (sd >= max_sd)
+		max_sd = sd;
+	set_active_shared(s);
 }
 
 static void
@@ -435,7 +479,7 @@ do_send(Conn * conn)
 			 */
 			call->timeout =
 			    param.timeout ? timer_now() + param.timeout : 0.0;
-			set_active(conn, &wrfds);
+			set_active_write(conn);
 			return;
 		}
 
@@ -469,7 +513,7 @@ do_send(Conn * conn)
 		call->timeout = param.timeout + param.think_timeout;
 		if (call->timeout > 0.0)
 			call->timeout += timer_now();
-		set_active(conn, &rdfds);
+		set_active_read(conn);
 		if (conn->state < S_REPLY_STATUS)
 			conn->state = S_REPLY_STATUS;	/* expecting reply
 							 * status */
@@ -603,7 +647,7 @@ do_recv(Conn * s)
 	while (buf_len > 0);
 
 	if (s->recvq)
-		set_active(c->conn, &rdfds);
+		set_active_read(c->conn);
 }
 
 struct sockaddr_in *
@@ -745,11 +789,11 @@ core_ssl_connect(Conn * s)
 			if (reason == SSL_ERROR_WANT_READ
 			    && !FD_ISSET(s->sd, &rdfds)) {
 				FD_CLR(s->sd, &wrfds);
-				set_active(s, &rdfds);
+				set_active_read(s);
 			} else if (reason == SSL_ERROR_WANT_WRITE
 				   && !FD_ISSET(s->sd, &wrfds)) {
 				FD_CLR(s->sd, &rdfds);
-				set_active(s, &wrfds);
+				set_active_write(s);
 			}
 			return;
 		}
@@ -940,7 +984,7 @@ core_connect(Conn * s)
 		 * connection establishment.  
 		 */
 		s->state = S_CONNECTING;
-		set_active(s, &wrfds);
+		set_active_write(s);
 		if (param.timeout > 0.0) {
 			arg.vp = s;
 			assert(!s->watchdog);
@@ -1041,7 +1085,7 @@ core_send(Conn * conn, Call * call)
 			return -1;
 		call->timeout =
 		    param.timeout ? timer_now() + param.timeout : 0.0;
-		set_active(conn, &wrfds);
+		set_active_write(conn);
 	} else {
 		conn->sendq_tail->sendq_next = call;
 		conn->sendq_tail = call;
