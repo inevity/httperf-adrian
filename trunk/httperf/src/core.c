@@ -276,25 +276,29 @@ port_get(void)
 static void
 conn_read_set(Conn *s)
 {
-	FD_SET(s->sd, &rdfds);
+	if (s->sd > -1)
+		FD_SET(s->sd, &rdfds);
 }
 
 static void
 conn_read_clear(Conn *s)
 {
-	FD_CLR(s->sd, &rdfds);
+	if (s->sd > -1)
+		FD_CLR(s->sd, &rdfds);
 }
 
 static void
 conn_write_set(Conn *s)
 {
-	FD_SET(s->sd, &wrfds);
+	if (s->sd > -1)
+		FD_SET(s->sd, &wrfds);
 }
 
 static void
 conn_write_clear(Conn *s)
 {
-	FD_CLR(s->sd, &wrfds);
+	if (s->sd > -1)
+		FD_CLR(s->sd, &wrfds);
 }
 
 static void
@@ -1156,6 +1160,41 @@ core_close(Conn * conn)
 	conn_dec_ref(conn);
 }
 
+static void
+conn_handle_event(int sd, int is_readable, int is_writable)
+{
+	Conn *conn = sd_to_conn[sd];
+	Any_Type arg;
+
+	conn_inc_ref(conn);
+
+	if (conn->watchdog) {
+		timer_cancel(conn-> watchdog);
+		conn->watchdog = 0;
+	}
+	if (conn->state == S_CONNECTING) {
+#ifdef HAVE_SSL
+		if (param.use_ssl)
+			core_ssl_connect (conn);
+		else
+#endif
+		if (is_writable) {
+			conn_write_clear(conn);
+			conn->state = S_CONNECTED;
+			arg.l = 0;
+			event_signal(EV_CONN_CONNECTED, (Object *) conn, arg);
+		}
+	} else {
+		if (is_writable && conn->sendq)
+			do_send(conn);
+			if (is_readable && conn->recvq)
+				do_recv(conn);
+	}
+
+	conn_dec_ref(conn);
+}
+
+
 void
 core_loop(void)
 {
@@ -1163,8 +1202,6 @@ core_loop(void)
 	    0;
 	fd_set          readable, writable;
 	fd_mask         mask;
-	Any_Type        arg;
-	Conn           *conn;
 
 	while (running) {
 		struct timeval  tv = select_timeout;
@@ -1225,45 +1262,7 @@ core_loop(void)
 						 * only handle sockets that
 						 * haven't timed out yet 
 						 */
-						conn = sd_to_conn[sd];
-
-						conn_inc_ref(conn);
-
-						if (conn->watchdog) {
-							timer_cancel(conn->
-								     watchdog);
-							conn->watchdog = 0;
-						}
-						if (conn->state ==
-						    S_CONNECTING) {
-#ifdef HAVE_SSL
-							if (param.use_ssl)
-								core_ssl_connect
-								    (conn);
-							else
-#endif
-							if (is_writable) {
-								conn_write_clear(conn);
-								conn->state =
-								    S_CONNECTED;
-								arg.l = 0;
-								event_signal
-								    (EV_CONN_CONNECTED,
-								     (Object *)
-								     conn,
-								     arg);
-							}
-						} else {
-							if (is_writable
-							    && conn->sendq)
-								do_send(conn);
-							if (is_readable
-							    && conn->recvq)
-								do_recv(conn);
-						}
-
-						conn_dec_ref(conn);
-
+						conn_handle_event(sd, is_readable, is_writable);
 						if (n > 0)
 							timer_tick();
 					}
