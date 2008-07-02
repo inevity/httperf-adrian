@@ -37,6 +37,7 @@
 #include "config.h"
 
 #include <assert.h>
+#include <event.h>
 
 #include <generic_types.h>
 #include <object.h>

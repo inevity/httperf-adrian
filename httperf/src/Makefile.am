@@ -1,7 +1,9 @@
 SUBDIRS = gen lib stat
 
 # what flags you want to pass to the C compiler & linker
-AM_CFLAGS = -I$(srcdir) -I$(srcdir)/gen -I$(srcdir)/lib -I$(srcdir)/stat
+AM_CFLAGS = -I$(srcdir) -I$(srcdir)/gen -I$(srcdir)/lib -I$(srcdir)/stat -I/usr/local/include
+
+AM_LDFLAGS = -L/usr/local/lib -levent
 
 bin_PROGRAMS = httperf
 

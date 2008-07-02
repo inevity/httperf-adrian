@@ -39,6 +39,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <event.h>
 
 #include <generic_types.h>
 #include <object.h>
