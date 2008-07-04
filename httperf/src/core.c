@@ -40,7 +40,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <event.h>
 
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -50,6 +49,7 @@
 #ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
 #endif
+#include <event.h>
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
