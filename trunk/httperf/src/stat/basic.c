@@ -41,6 +41,7 @@
 #include <float.h>
 #include <stdio.h>
 #include <sys/resource.h>
+#include <sys/types.h>
 #include <event.h>
 
 #include <generic_types.h>
